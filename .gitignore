@@ -1,0 +1,58 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+env/
+venv/
+.venv/
+ENV/
+
+# Datasets and raw data (per ARCHITECTURE.md)
+dataset/
+data/raw/
+
+# Model checkpoints & weights
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+
+# MLflow tracking & artifacts
+mlruns/
+mlflow.db
+.trash/
+
+# Environment files and credentials
+.env
+.env.local
+
+# Operating System & IDEs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
