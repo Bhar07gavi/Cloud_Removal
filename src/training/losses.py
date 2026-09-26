@@ -1,65 +1,34 @@
-"""Loss functions for Pix2Pix GAN training: adversarial (BCE) + L1 reconstruction."""
+"""Loss functions for pix2pix GAN training."""
 
 import torch
 import torch.nn as nn
 
-__all__ = ["GANLoss", "build_gan_loss"]
-
 
 class GANLoss(nn.Module):
-    """Loss module for Pix2Pix GAN training combining adversarial BCE and L1 reconstruction loss."""
+    """Adversarial loss supporting BCE and LSGAN (MSE)."""
 
-    def __init__(self, lambda_l1: float = 100.0) -> None:
+    def __init__(self, loss_type: str = "bce"):
         super().__init__()
-        self.bce_loss = nn.BCELoss()
-        self.l1_loss = nn.L1Loss()
-        self.lambda_l1 = lambda_l1
+        self.loss_type = loss_type.lower()
+        if self.loss_type == "bce":
+            self.criterion = nn.BCELoss()
+        elif self.loss_type == "lsgan":
+            self.criterion = nn.MSELoss()
+        else:
+            raise ValueError(f"Unknown loss type: {loss_type}. Choose 'bce' or 'lsgan'.")
 
-    def discriminator_loss(
-        self, pred_real: torch.Tensor, pred_fake: torch.Tensor
-    ) -> torch.Tensor:
-        """Compute discriminator adversarial loss.
-
-        Args:
-            pred_real: Discriminator predictions on real image pairs.
-            pred_fake: Discriminator predictions on fake image pairs.
-
-        Returns:
-            Averaged BCE loss for real and fake predictions.
-        """
-        real_loss = self.bce_loss(pred_real, torch.ones_like(pred_real))
-        fake_loss = self.bce_loss(pred_fake, torch.zeros_like(pred_fake))
-        return (real_loss + fake_loss) * 0.5
-
-    def generator_loss(
-        self,
-        pred_fake: torch.Tensor,
-        generated: torch.Tensor,
-        target: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Compute generator adversarial and L1 reconstruction loss.
-
-        Args:
-            pred_fake: Discriminator predictions on fake image pairs.
-            generated: Generated images from generator.
-            target: Ground truth target images.
-
-        Returns:
-            Tuple of (total_loss, adv_loss, l1_loss).
-        """
-        adv_loss = self.bce_loss(pred_fake, torch.ones_like(pred_fake))
-        l1_loss = self.l1_loss(generated, target)
-        total = adv_loss + self.lambda_l1 * l1_loss
-        return total, adv_loss, l1_loss
+    def forward(self, prediction: torch.Tensor, is_real: bool) -> torch.Tensor:
+        target_val = 1.0 if is_real else 0.0
+        target = torch.full_like(prediction, target_val)
+        return self.criterion(prediction, target)
 
 
-def build_gan_loss(lambda_l1: float = 100.0) -> GANLoss:
-    """Build and return a GANLoss instance with the given L1 penalty weight.
+class PixelLoss(nn.Module):
+    """L1 pixel reconstruction loss."""
 
-    Args:
-        lambda_l1: Weight for the L1 reconstruction loss term.
+    def __init__(self):
+        super().__init__()
+        self.criterion = nn.L1Loss()
 
-    Returns:
-        Configured GANLoss instance.
-    """
-    return GANLoss(lambda_l1=lambda_l1)
+    def forward(self, generated: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return self.criterion(generated, target)

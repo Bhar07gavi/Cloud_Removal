@@ -1,0 +1,35 @@
+# Pix2Pix Training Configuration
+dataset:
+  config_path: "configs/dataset_rice.yaml"
+
+model:
+  generator: "unet"
+  discriminator: "patchgan"
+  patch_receptive_field: 70
+
+loss:
+  adversarial: "bce"                    # "bce" or "lsgan"
+  lambda_l1: 100                        # Weight for L1 reconstruction loss
+
+optimizer:
+  type: "adam"
+  lr: 0.0002
+  betas: [0.5, 0.999]
+
+training:
+  batch_size: 8                         # 8 to 16 for Colab T4 GPU
+  epochs: 50
+  lr_schedule: "constant"
+  log_every_n_epochs: 1
+  sample_grid_every_n_epochs: 5
+  num_workers: 2
+  save_every: 10
+  seed: 42
+  device: "auto"                        # "cuda", "cpu", or "auto"
+
+experiment:
+  model_dir: "models/baseline"
+
+mlflow:
+  experiment_name: "rice-cloud-removal-pix2pix"
+  tracking_uri: ""

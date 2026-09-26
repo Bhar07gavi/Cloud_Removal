@@ -1,0 +1,23 @@
+name: rice_combined
+
+bands:
+  count: 3
+  names: ["R", "G", "B"]
+
+patch_size: 256
+
+paths:
+  raw: "dataset"                        # Parent directory containing RICE1 and RICE2
+  processed: "data/processed/rice_combined"
+  pairs_manifest: "data/processed/rice_combined/pairs.csv"
+  splits_dir: "data/splits"
+
+split:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+  seed: 42
+
+normalization:
+  method: "minmax"                      # Scales [0, 255] -> [-1, 1] matching Tanh
+  per_band_stats: false
