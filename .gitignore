@@ -34,6 +34,8 @@ ENV/
 # Datasets and raw data (per ARCHITECTURE.md)
 dataset/
 data/raw/
+data/processed/
+data/splits/
 
 # Model checkpoints & weights
 *.pt
