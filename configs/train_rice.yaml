@@ -32,4 +32,4 @@ experiment:
 
 mlflow:
   experiment_name: "rice-cloud-removal-pix2pix"
-  tracking_uri: ""
+  tracking_uri: "https://dagshub.com/Bhar07gavi/Cloud_Removal.mlflow"
