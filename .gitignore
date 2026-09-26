@@ -59,3 +59,4 @@ Thumbs.db
 .vscode/
 *.log
 /dataset
+/test.txt
