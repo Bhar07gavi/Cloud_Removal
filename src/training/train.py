@@ -326,9 +326,10 @@ def train_one_run(config: dict) -> float:
     gen.load_state_dict(ckpt["generator"])
     gen.eval()
 
+    print(f"  [trial] Computing val SSIM over {len(val_ds)} images...")
     ssim_scores: list[float] = []
     with torch.no_grad():
-        for cloud, gt in val_loader:
+        for cloud, gt in tqdm(val_loader, desc="Computing val SSIM", leave=False):
             cloud = cloud.to(device)
             fake  = gen(cloud)
             for i in range(fake.shape[0]):
