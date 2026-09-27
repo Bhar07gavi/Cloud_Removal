@@ -7,7 +7,7 @@ bands:
 patch_size: 256
 
 paths:
-  raw: "dataset"                        # Parent directory containing RICE1 and RICE2
+  raw: "dataset/RICE"                   # Kaggle zip extracts to dataset/RICE/{RICE1,RICE2}
   processed: "data/processed/rice_combined"
   pairs_manifest: "data/processed/rice_combined/pairs.csv"
   splits_dir: "data/splits"
