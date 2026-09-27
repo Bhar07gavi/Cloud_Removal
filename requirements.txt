@@ -9,4 +9,5 @@ dagshub
 dvc[s3]
 matplotlib
 tqdm
+optuna
 pytest
