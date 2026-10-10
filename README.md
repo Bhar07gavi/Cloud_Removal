@@ -19,12 +19,12 @@ pip install gradio  # For the web UI
 We use the RICE dataset. You can download it quickly using the Kaggle API:
 ```bash
 kaggle datasets download -d shubhank/rice-remote-sensing-images-for-cloud-removal
-unzip -q rice-remote-sensing-images-for-cloud-removal.zip -d dataset/
+unzip -q rice-remote-sensing-images-for-cloud-removal.zip -d dataset/RICE
 ```
-Ensure the folder structure looks like `dataset/RICE1/cloud/`, `dataset/RICE1/label/`, etc.
+Ensure the folder structure looks like `dataset/RICE/RICE1` and `dataset/RICE/RICE2`.
 Run the preprocessing script to slice the images into 256x256 patches:
 ```bash
-python -m src.data.preprocess --config configs/dataset.yaml
+python -m src.data.preprocess --config configs/dataset_rice.yaml
 ```
 
 ## 🧠 Training
@@ -33,9 +33,21 @@ Training is fully tracked using **MLflow** hosted on DAGsHub. The training scrip
 
 To train the model from scratch (best run on a GPU like a Colab Tesla T4):
 ```bash
-python src/training/train.py --config configs/train_rice.yaml
+python -m src.training.train --config configs/train_rice.yaml
 ```
 The best model weights are automatically saved to `models/baseline/checkpoints/best.pt`.
+
+## 🧪 Testing
+The repository uses pytest for unit testing core functionalities such as dataset loading and tensor value transformations. You can run the test suite with:
+```bash
+pytest -q
+```
+
+## 📊 Evaluation
+You can evaluate the trained model on the test split using `eval.py`. It computes the Mean PSNR and Mean SSIM for both the Model's output and a "Baseline (cloudy input)" (which simulates doing nothing and outputting the cloudy image directly), and presents a summary table with the Delta:
+```bash
+python -m src.models.eval --config configs/train_rice.yaml
+```
 
 ## 🌐 Running the Web Demo (Serving)
 
@@ -57,25 +69,19 @@ python serving/demo_app.py
 
 ## ✂️ Not Attempted Due to Timebox
 
-Given the strict 1.5-day constraint, we intentionally cut the following scope (as documented in our PRD & Project Plan) to guarantee we shipped a working end-to-end pipeline:
+Given the strict constraint, we intentionally cut the following scope to guarantee we shipped a working end-to-end pipeline:
 
 ### Scope / Feature Cuts
 | Item | Reason |
 |---|---|
 | **SEN12MS-CR-TS integration** | Multispectral/SAR data was too heavy and complex for the timebox. Sticking to RGB (RICE) ensured rapid iteration. |
-| **Full DVC pipeline** | Replaced with a lightweight Kaggle API approach due to setup friction across environments. |
 | **HF Spaces deployment** | Left as a stretch goal; prioritized getting the local Gradio demo running reliably instead. |
 | **HF `DE` dataset eval** | Cross-dataset generalization check was dropped to focus on optimizing the primary RICE validation metrics. |
 | **Monitoring/drift detection** | Out of scope per PRD. Focus was purely on the initial training & deployment phases. |
 
 ### Tool / Infrastructure Cuts
-* **scikit-image:** Skipped writing the `eval.py` script to calculate PSNR/SSIM, relying on the visual output and L1 loss instead.
-* **SQLite:** Bypassed completely because we used DAGsHub for our MLflow server instead of setting up a local database.
-* **MANIFEST.json (custom):** Skipped writing a custom JSON file to hash the data, and instead used the Kaggle API directly.
 * **FastAPI:** Didn't build a standalone API. Wired our Gradio UI directly to the PyTorch model for simplicity.
 * **Docker:** Ran the code directly in Colab and local environments instead of building a container.
 * **GitHub Actions:** Did not set up automated CI pipelines to run on code push.
-* **pytest:** Didn't write unit tests for the dataset shapes or API responses.
 * **ruff:** Didn't run an automated code linter.
 * **MLflow Model Registry:** Tracked the experiment in MLflow, but skipped pulling the "Production" model via the registry API (`load_production_model()`). Instead, downloaded `best.pt` directly.
-* **Optuna:** Hyperparameter tuning was skipped in favor of using static, proven pix2pix defaults (`configs/train_rice.yaml`).
