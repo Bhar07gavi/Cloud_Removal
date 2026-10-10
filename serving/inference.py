@@ -1,4 +1,6 @@
 import torch
+from src.utils.device import get_device
+from src.data.transforms import to_unit_range, unit_to_model_range
 import torchvision.transforms as T
 from PIL import Image
 import numpy as np
@@ -15,8 +17,8 @@ except ImportError:
     from src.models.generator import UNetGenerator
 
 class CloudRemovalModel:
-    def __init__(self, model_path: str = "serving/best.pt"):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    def __init__(self, model_path: str = "serving/best.pt", device: str = "auto"):
+        self.device = get_device(device)
         print(f"Loading model on {self.device}...")
         
         self.generator = UNetGenerator(in_channels=3, out_channels=3)
@@ -32,7 +34,7 @@ class CloudRemovalModel:
         self.transform = T.Compose([
             T.Resize((256, 256)),
             T.ToTensor(),
-            T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+            T.Lambda(lambda x: unit_to_model_range(x))
         ])
 
     @torch.no_grad()
@@ -44,8 +46,7 @@ class CloudRemovalModel:
         output_tensor = self.generator(input_tensor).squeeze(0).cpu()
         
         # Denormalize [-1, 1] -> [0, 1]
-        output_tensor = (output_tensor + 1.0) / 2.0
-        output_tensor = torch.clamp(output_tensor, 0.0, 1.0)
+        output_tensor = to_unit_range(output_tensor)
         
         # Convert back to PIL Image
         output_image = T.ToPILImage()(output_tensor)

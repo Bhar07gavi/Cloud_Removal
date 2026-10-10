@@ -12,6 +12,7 @@ import mlflow
 import numpy as np
 from skimage.metrics import structural_similarity
 import torch
+from src.utils.device import get_device
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -20,6 +21,7 @@ import yaml
 from src.data.dataset import CloudDataset
 from src.models.discriminator import PatchGANDiscriminator
 from src.models.generator import UNetGenerator
+from src.data.transforms import to_unit_range
 from src.training.losses import GANLoss, PixelLoss
 
 def load_config(path: str) -> dict:
@@ -59,7 +61,7 @@ def make_sample_grid(generator: nn.Module, dataloader: DataLoader, device: torch
         for j, (img, title) in enumerate([(clouds[i], "Cloudy"), (fakes[i], "Generated"), (gts[i], "Ground Truth")]):
             ax = axes[i, j]
             # Denormalize [-1, 1] -> [0, 1]
-            img_np = ((img + 1.0) / 2.0).permute(1, 2, 0).numpy().clip(0, 1)
+            img_np = to_unit_range(img).permute(1, 2, 0).numpy()
             ax.imshow(img_np)
             ax.set_title(title)
             ax.axis("off")
@@ -67,6 +69,81 @@ def make_sample_grid(generator: nn.Module, dataloader: DataLoader, device: torch
     fig.tight_layout()
     generator.train()
     return fig
+
+def train_epoch(gen, disc, loader, opt_g, opt_d, criterion_adv, criterion_l1, lambda_l1, device, desc) -> tuple[float, float, float]:
+    gen.train()
+    disc.train()
+    g_acc, d_acc, l1_acc = 0.0, 0.0, 0.0
+    batches = 0
+
+    pbar = tqdm(loader, desc=desc, leave=False)
+    for cloud, gt in pbar:
+        cloud, gt = cloud.to(device), gt.to(device)
+
+        # Train Discriminator
+        fake = gen(cloud)
+        pred_real = disc(torch.cat([cloud, gt], dim=1))
+        pred_fake = disc(torch.cat([cloud, fake.detach()], dim=1))
+        loss_d_real = criterion_adv(pred_real, is_real=True)
+        loss_d_fake = criterion_adv(pred_fake, is_real=False)
+        loss_d = (loss_d_real + loss_d_fake) * 0.5
+
+        opt_d.zero_grad()
+        loss_d.backward()
+        opt_d.step()
+
+        # Train Generator
+        pred_fake = disc(torch.cat([cloud, fake], dim=1))
+        loss_g_adv = criterion_adv(pred_fake, is_real=True)
+        loss_g_l1 = criterion_l1(fake, gt)
+        loss_g = loss_g_adv + lambda_l1 * loss_g_l1
+
+        opt_g.zero_grad()
+        loss_g.backward()
+        opt_g.step()
+
+        g_acc += loss_g.item()
+        d_acc += loss_d.item()
+        l1_acc += loss_g_l1.item()
+        batches += 1
+
+        pbar.set_postfix({"G": f"{loss_g.item():.3f}", "D": f"{loss_d.item():.3f}", "L1": f"{loss_g_l1.item():.3f}"})
+
+    avg_g = g_acc / max(batches, 1)
+    avg_d = d_acc / max(batches, 1)
+    avg_l1 = l1_acc / max(batches, 1)
+    return avg_g, avg_d, avg_l1
+
+def validate(gen, loader, device, criterion_l1) -> float:
+    gen.eval()
+    total_l1 = 0.0
+    total_samples = 0
+    with torch.no_grad():
+        for cloud, gt in loader:
+            cloud, gt = cloud.to(device), gt.to(device)
+            fake = gen(cloud)
+            loss = criterion_l1(fake, gt).item()
+            batch_size = cloud.size(0)
+            total_l1 += loss * batch_size
+            total_samples += batch_size
+    gen.train()
+    return total_l1 / max(total_samples, 1)
+
+def compute_ssim(gen, loader, device) -> float:
+    gen.eval()
+    ssim_scores: list[float] = []
+    with torch.no_grad():
+        for cloud, gt in tqdm(loader, desc="Computing val SSIM", leave=False):
+            cloud = cloud.to(device)
+            fake = gen(cloud)
+            for i in range(fake.shape[0]):
+                fake_np = to_unit_range(fake[i]).permute(1, 2, 0).cpu().numpy().astype("float32")
+                gt_np = to_unit_range(gt[i]).permute(1, 2, 0).cpu().numpy().astype("float32")
+                ssim_scores.append(float(structural_similarity(gt_np, fake_np, data_range=1.0, channel_axis=2)))
+    gen.train()
+    return float(np.mean(ssim_scores)) if ssim_scores else 0.0
+
+
 
 def train(config_path: str, epochs_override: int | None = None):
     cfg = load_config(config_path)
@@ -76,7 +153,7 @@ def train(config_path: str, epochs_override: int | None = None):
     seed_everything(seed)
 
     device_str = cfg["training"].get("device", "auto")
-    device = torch.device("cuda" if torch.cuda.is_available() and device_str == "auto" else "cpu")
+    device = get_device(device_str)
     epochs = epochs_override if epochs_override is not None else cfg["training"]["epochs"]
     batch_size = cfg["training"]["batch_size"]
     lr = cfg["optimizer"]["lr"]
@@ -125,52 +202,14 @@ def train(config_path: str, epochs_override: int | None = None):
         })
 
         for epoch in range(1, epochs + 1):
-            gen.train()
-            disc.train()
-            g_loss_acc, d_loss_acc, l1_loss_acc = 0.0, 0.0, 0.0
-            batches = 0
+            desc = f"Epoch {epoch}/{epochs}"
+            avg_g, avg_d, avg_l1 = train_epoch(gen, disc, train_loader, opt_g, opt_d, criterion_adv, criterion_l1, lambda_l1, device, desc)
 
-            pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}", leave=False)
-            for cloud, gt in pbar:
-                cloud, gt = cloud.to(device), gt.to(device)
+            val_l1 = validate(gen, val_loader, device, criterion_l1)
 
-                # --- 1. Train Discriminator ---
-                fake = gen(cloud)
-                pred_real = disc(torch.cat([cloud, gt], dim=1))
-                loss_d_real = criterion_adv(pred_real, is_real=True)
+            print(f"Epoch {epoch}/{epochs} | G: {avg_g:.4f} | D: {avg_d:.4f} | Train L1: {avg_l1:.4f} | Val L1: {val_l1:.4f}")
 
-                pred_fake = disc(torch.cat([cloud, fake.detach()], dim=1))
-                loss_d_fake = criterion_adv(pred_fake, is_real=False)
-
-                loss_d = (loss_d_real + loss_d_fake) * 0.5
-                opt_d.zero_grad()
-                loss_d.backward()
-                opt_d.step()
-
-                # --- 2. Train Generator ---
-                pred_fake = disc(torch.cat([cloud, fake], dim=1))
-                loss_g_adv = criterion_adv(pred_fake, is_real=True)
-                loss_g_l1 = criterion_l1(fake, gt)
-                loss_g = loss_g_adv + lambda_l1 * loss_g_l1
-
-                opt_g.zero_grad()
-                loss_g.backward()
-                opt_g.step()
-
-                g_loss_acc += loss_g.item()
-                d_loss_acc += loss_d.item()
-                l1_loss_acc += loss_g_l1.item()
-                batches += 1
-
-                pbar.set_postfix({"G": f"{loss_g.item():.3f}", "D": f"{loss_d.item():.3f}", "L1": f"{loss_g_l1.item():.3f}"})
-
-            avg_g = g_loss_acc / max(batches, 1)
-            avg_d = d_loss_acc / max(batches, 1)
-            avg_l1 = l1_loss_acc / max(batches, 1)
-
-            print(f"Epoch {epoch}/{epochs} | G: {avg_g:.4f} | D: {avg_d:.4f} | L1: {avg_l1:.4f}")
-
-            mlflow.log_metrics({"train/G_loss": avg_g, "train/D_loss": avg_d, "train/L1_loss": avg_l1}, step=epoch)
+            mlflow.log_metrics({"train/G_loss": avg_g, "train/D_loss": avg_d, "train/L1_loss": avg_l1, "val/L1_loss": val_l1}, step=epoch)
 
             # Sample Grid
             if epoch % cfg["training"].get("sample_grid_every_n_epochs", 5) == 0:
@@ -179,14 +218,17 @@ def train(config_path: str, epochs_override: int | None = None):
                 fig.savefig(str(grid_file), dpi=100)
                 plt.close(fig)
                 mlflow.log_artifact(str(grid_file), "sample_grids")
+                
+                val_ssim = compute_ssim(gen, val_loader, device)
+                mlflow.log_metric("val/SSIM", val_ssim, step=epoch)
 
             # Checkpoint
-            if avg_l1 < best_val_loss:
-                best_val_loss = avg_l1
+            if val_l1 < best_val_loss:
+                best_val_loss = val_l1
                 torch.save({"epoch": epoch, "generator": gen.state_dict(), "discriminator": disc.state_dict()}, str(checkpoint_dir / "best.pt"))
                 print(f"  * New best model saved (val L1: {best_val_loss:.4f})")
 
-        print(f"Training Complete! Best L1: {best_val_loss:.4f}")
+        print(f"Training Complete! Best Val L1: {best_val_loss:.4f}")
 
 
 # ---------------------------------------------------------------------------
@@ -221,9 +263,7 @@ def train_one_run(config: dict) -> float:
     seed_everything(seed)
 
     device_str = cfg["training"].get("device", "auto")
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() and device_str in ("auto", "cuda") else "cpu"
-    )
+    device = get_device(device_str)
     epochs     = cfg["training"]["epochs"]
     batch_size = cfg["training"]["batch_size"]
     lr         = cfg["optimizer"]["lr"]
@@ -258,47 +298,9 @@ def train_one_run(config: dict) -> float:
     best_val_l1 = float("inf")
 
     for epoch in range(1, epochs + 1):
-        gen.train()
-        disc.train()
-        g_acc = d_acc = l1_acc = 0.0
-        batches = 0
-
-        pbar = tqdm(train_loader, desc=f"  [trial] Epoch {epoch}/{epochs}", leave=False)
-        for cloud, gt in pbar:
-            cloud, gt = cloud.to(device), gt.to(device)
-
-            # Train Discriminator
-            fake      = gen(cloud)
-            pred_real = disc(torch.cat([cloud, gt],            dim=1))
-            pred_fake = disc(torch.cat([cloud, fake.detach()], dim=1))
-            loss_d    = (criterion_adv(pred_real, is_real=True) +
-                         criterion_adv(pred_fake, is_real=False)) * 0.5
-            opt_d.zero_grad()
-            loss_d.backward()
-            opt_d.step()
-
-            # Train Generator
-            pred_fake  = disc(torch.cat([cloud, fake], dim=1))
-            loss_g_adv = criterion_adv(pred_fake, is_real=True)
-            loss_g_l1  = criterion_l1(fake, gt)
-            loss_g     = loss_g_adv + lambda_l1 * loss_g_l1
-            opt_g.zero_grad()
-            loss_g.backward()
-            opt_g.step()
-
-            g_acc   += loss_g.item()
-            d_acc   += loss_d.item()
-            l1_acc  += loss_g_l1.item()
-            batches += 1
-            pbar.set_postfix({
-                "G": f"{loss_g.item():.3f}",
-                "D": f"{loss_d.item():.3f}",
-                "L1": f"{loss_g_l1.item():.3f}",
-            })
-
-        avg_g   = g_acc  / max(batches, 1)
-        avg_d   = d_acc  / max(batches, 1)
-        avg_l1  = l1_acc / max(batches, 1)
+        desc = f"  [trial] Epoch {epoch}/{epochs}"
+        avg_g, avg_d, avg_l1 = train_epoch(gen, disc, train_loader, opt_g, opt_d, criterion_adv, criterion_l1, lambda_l1, device, desc)
+        
         print(f"  [trial] Epoch {epoch}/{epochs} | G: {avg_g:.4f} | D: {avg_d:.4f} | L1: {avg_l1:.4f}")
 
         # Log to the active nested MLflow run (if any)
@@ -310,8 +312,9 @@ def train_one_run(config: dict) -> float:
         except Exception:
             pass  # no active run → ignore
 
-        if avg_l1 < best_val_l1:
-            best_val_l1 = avg_l1
+        val_l1 = validate(gen, val_loader, device, criterion_l1)
+        if val_l1 < best_val_l1:
+            best_val_l1 = val_l1
             torch.save(
                 {
                     "epoch": epoch,
@@ -333,12 +336,8 @@ def train_one_run(config: dict) -> float:
             cloud = cloud.to(device)
             fake  = gen(cloud)
             for i in range(fake.shape[0]):
-                fake_np = (
-                    (fake[i] + 1.0) / 2.0
-                ).permute(1, 2, 0).cpu().numpy().clip(0, 1).astype("float32")
-                gt_np = (
-                    (gt[i] + 1.0) / 2.0
-                ).permute(1, 2, 0).cpu().numpy().clip(0, 1).astype("float32")
+                fake_np = to_unit_range(fake[i]).permute(1, 2, 0).cpu().numpy().astype("float32")
+                gt_np = to_unit_range(gt[i]).permute(1, 2, 0).cpu().numpy().astype("float32")
                 ssim_scores.append(
                     float(structural_similarity(gt_np, fake_np, data_range=1.0, channel_axis=2))
                 )

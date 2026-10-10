@@ -13,6 +13,7 @@ from pathlib import Path
 import mlflow
 import numpy as np
 import torch
+from src.utils.device import get_device
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -20,6 +21,7 @@ import yaml
 
 from src.data.dataset import CloudDataset
 from src.models.generator import UNetGenerator
+from src.data.transforms import to_unit_range
 
 
 # ---------------------------------------------------------------------------
@@ -35,15 +37,11 @@ def load_config(path: str) -> dict:
 def denormalize(tensor: torch.Tensor) -> np.ndarray:
     """Convert model output from [-1, 1] (Tanh) back to [0, 1] float32.
 
-    Mirrors the inverse of normalize_patch() in src/data/preprocess.py:
-        patch = (raw_uint8 / 127.5) - 1.0
-    So the inverse is:
-        uint8_approx = (tensor + 1.0) / 2.0  ->  [0, 1]
-
-    Consistent with the denorm used in make_sample_grid() in train.py (line 61).
+    Relies on src.data.transforms.to_unit_range to perform the standard mapping
+    and clipping before permuting to HWC for scikit-image evaluation.
     """
-    arr = ((tensor + 1.0) / 2.0).permute(1, 2, 0).cpu().numpy()
-    return arr.clip(0.0, 1.0).astype(np.float32)
+    arr = to_unit_range(tensor).permute(1, 2, 0).cpu().numpy()
+    return arr.astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -57,9 +55,7 @@ def evaluate(config_path: str) -> None:
 
     # ---- Device ----
     device_str = cfg["training"].get("device", "auto")
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() and device_str in ("auto", "cuda") else "cpu"
-    )
+    device = get_device(device_str)
     print(f"Using device: {device}")
 
     # ---- Load test dataset (same CloudDataset used in training) ----
@@ -107,8 +103,10 @@ def evaluate(config_path: str) -> None:
     # ---- Inference + metrics ----
     psnr_scores: list[float] = []
     ssim_scores: list[float] = []
+    psnr_base_scores: list[float] = []
+    ssim_base_scores: list[float] = []
 
-    header = f"{'Patch':>6}  {'PSNR (dB)':>10}  {'SSIM':>8}"
+    header = f"{'Patch':>6}  {'PSNR (dB)':>10}  {'SSIM':>8}  {'Base PSNR':>10}  {'Base SSIM':>9}"
     print("\n" + header)
     print("-" * len(header))
 
@@ -121,8 +119,11 @@ def evaluate(config_path: str) -> None:
             fake_np = denormalize(fake.squeeze(0))   # (H, W, C)
             gt_np   = denormalize(gt.squeeze(0))     # (H, W, C)
 
+            cloud_np = denormalize(cloud.squeeze(0))
+
             # PSNR - data_range=1.0 because images are in [0, 1]
             psnr = peak_signal_noise_ratio(gt_np, fake_np, data_range=1.0)
+            psnr_base = peak_signal_noise_ratio(gt_np, cloud_np, data_range=1.0)
 
             # SSIM - channel_axis=2 for HWC multi-channel, data_range=1.0
             ssim = structural_similarity(
@@ -130,18 +131,37 @@ def evaluate(config_path: str) -> None:
                 data_range=1.0,
                 channel_axis=2,
             )
+            ssim_base = structural_similarity(
+                gt_np, cloud_np,
+                data_range=1.0,
+                channel_axis=2,
+            )
 
             psnr_scores.append(float(psnr))
             ssim_scores.append(float(ssim))
+            psnr_base_scores.append(float(psnr_base))
+            ssim_base_scores.append(float(ssim_base))
 
-            print(f"{idx + 1:>6}  {psnr:>10.4f}  {ssim:>8.6f}")
+            print(f"{idx + 1:>6}  {psnr:>10.4f}  {ssim:>8.6f}  {psnr_base:>10.4f}  {ssim_base:>9.6f}")
 
     mean_psnr = float(np.mean(psnr_scores))
     mean_ssim = float(np.mean(ssim_scores))
+    base_mean_psnr = float(np.mean(psnr_base_scores))
+    base_mean_ssim = float(np.mean(ssim_base_scores))
+    delta_psnr = mean_psnr - base_mean_psnr
+    delta_ssim = mean_ssim - base_mean_ssim
 
     print("\n" + "=" * len(header))
-    print(f"{'Mean':>6}  {mean_psnr:>10.4f}  {mean_ssim:>8.6f}")
+    print(f"{'Mean':>6}  {mean_psnr:>10.4f}  {mean_ssim:>8.6f}  {base_mean_psnr:>10.4f}  {base_mean_ssim:>9.6f}")
     print(f"\nTotal patches evaluated: {len(psnr_scores)}")
+
+    print("\nSummary Table:")
+    print(f"{'':>25} | {'Mean PSNR':>10} | {'Mean SSIM':>10}")
+    print("-" * 53)
+    print(f"{'Model':>25} | {mean_psnr:>10.4f} | {mean_ssim:>10.6f}")
+    print(f"{'Baseline (cloudy input)':>25} | {base_mean_psnr:>10.4f} | {base_mean_ssim:>10.6f}")
+    print("-" * 53)
+    print(f"{'Delta':>25} | {delta_psnr:>10.4f} | {delta_ssim:>10.6f}")
 
     # ---- Log to MLflow under a dedicated 'evaluation' run ----
     with mlflow.start_run(run_name="evaluation", tags={"stage": "evaluation"}):
@@ -154,6 +174,10 @@ def evaluate(config_path: str) -> None:
         mlflow.log_metrics({
             "eval/mean_psnr": mean_psnr,
             "eval/mean_ssim": mean_ssim,
+            "eval/baseline_mean_psnr": base_mean_psnr,
+            "eval/baseline_mean_ssim": base_mean_ssim,
+            "eval/delta_psnr": delta_psnr,
+            "eval/delta_ssim": delta_ssim,
         })
 
         # Log per-patch metrics as a step series so they appear as line charts
