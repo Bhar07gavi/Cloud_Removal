@@ -7,6 +7,7 @@ import random
 import numpy as np
 from PIL import Image
 import yaml
+from src.data.transforms import to_model_range
 
 def load_config(config_path: str) -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
@@ -22,9 +23,7 @@ def tile_image(img_array: np.ndarray, patch_size: int) -> list[tuple[np.ndarray,
     return patches
 
 def normalize_patch(patch: np.ndarray, cfg_norm: dict) -> np.ndarray:
-    patch = patch.astype(np.float32)
-    # [0, 255] -> [-1.0, 1.0]
-    return (patch / 127.5) - 1.0
+    return to_model_range(patch)
 
 def discover_rice_pairs(raw_dir: str) -> list[tuple[str, str, str]]:
     """Discovers pairs from raw_dir, automatically handling flat layouts
