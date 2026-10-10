@@ -1,6 +1,6 @@
-# DVC Dataset Push Instructions
+# DVC Dataset Sync & Push Instructions
 
-The dataset was tracked locally but was not pushed to the DagsHub DVC remote, causing `dvc pull` to fail for external contributors and notebooks. Follow these instructions to securely push the missing `dataset` directory to the remote without leaking credentials into Git.
+Follow these instructions to securely synchronize the tracked `dataset` directory with the DagsHub DVC remote without leaking credentials into Git.
 
 ## 1. Configure Local DVC Credentials
 
@@ -21,19 +21,22 @@ dvc status -c
 dvc push -r dagshub
 ```
 
-If successful, repeating `dvc status -c` should return a message indicating everything is synchronized. A correct result looks like:
+If successful, repeating `dvc status -c` prints:
 ```
-Data and pipelines are up to date.
+Cache and remote 'dagshub' are in sync.
 ```
 
 ## 3. Verify in a Fresh Clone
 
-To guarantee the fix works for users, verify the pull in a fresh clone of the repository:
+To verify the pull in a fresh clone of the repository, note that the `dvc remote modify --local` credential commands from Step 1 must be repeated there:
 
 ```bash
 git clone https://github.com/Bhar07gavi/Cloud_Removal.git cloud-removal-test
 cd cloud-removal-test
+dvc remote modify --local dagshub auth basic
+dvc remote modify --local dagshub user YOUR_USERNAME
+dvc remote modify --local dagshub password YOUR_TOKEN
 dvc pull -r dagshub
 ```
 
-If the pull completes without the `Missing cache files` error and populates the `dataset/` directory, the issue is fully resolved!
+If the pull completes without errors and populates the `dataset/` directory, the data synchronization is fully verified!

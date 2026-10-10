@@ -1,5 +1,4 @@
 import pytest
-import torch
 from unittest.mock import patch
 from src.utils.device import get_device
 

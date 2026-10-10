@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import pytest
 from src.data.transforms import to_model_range, to_unit_range, unit_to_model_range
 
 def test_round_trip():

@@ -3,7 +3,6 @@ from src.utils.device import get_device
 from src.data.transforms import to_unit_range, unit_to_model_range
 import torchvision.transforms as T
 from PIL import Image
-import numpy as np
 
 # Adjust the import based on your project structure
 # If running from root, 'src.models.generator' should work

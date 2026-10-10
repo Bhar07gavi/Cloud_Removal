@@ -4,7 +4,6 @@ import yaml
 import torch
 import csv
 from pathlib import Path
-import os
 
 from src.training.train import train, train_one_run
 
@@ -97,7 +96,7 @@ def setup_configs(tmp_path, monkeypatch):
             "sample_grid_every_n_epochs": 100
         },
         "mlflow": {
-            "tracking_uri": f"file:///{str(tmp_path / 'mlruns').replace(':', '|')}",
+            "tracking_uri": Path(tmp_path / "mlruns").as_uri(),
             "experiment_name": "test_exp"
         }
     }
@@ -191,7 +190,7 @@ def test_mlflow_generator_logging(setup_configs, monkeypatch):
         
     monkeypatch.setattr("src.training.train.validate", mock_validate)
     
-    train(cfg_path, epochs_override=2)
+    model_info = train(cfg_path, epochs_override=2)
     
     import mlflow
     import mlflow.pytorch
@@ -213,11 +212,22 @@ def test_mlflow_generator_logging(setup_configs, monkeypatch):
     
     # b) assert artifact list contains "generator" model and "configs" folder
     artifacts = [a.path for a in client.list_artifacts(train_run.info.run_id)]
-    assert "generator" in artifacts
     assert "configs" in artifacts
+    if hasattr(client, "search_logged_models"):
+        logged_models = [m.name for m in client.search_logged_models(experiment_ids=[exp.experiment_id])]
+        assert "generator" in artifacts or "generator" in logged_models
+    else:
+        assert "generator" in artifacts
     
     # c) load logged model with mlflow.pytorch.load_model on a fixed random input and assert torch.allclose against generator rebuilt from best.pt, using eval mode in both
-    logged_model = mlflow.pytorch.load_model(f"runs:/{train_run.info.run_id}/generator")
+    if model_info is not None and hasattr(model_info, "model_uri"):
+        model_uri = model_info.model_uri
+    elif hasattr(client, "search_logged_models"):
+        matching = [m for m in client.search_logged_models(experiment_ids=[exp.experiment_id]) if getattr(m, "source_run_id", None) == train_run.info.run_id]
+        model_uri = matching[0].model_uri if matching else f"runs:/{train_run.info.run_id}/generator"
+    else:
+        model_uri = f"runs:/{train_run.info.run_id}/generator"
+    logged_model = mlflow.pytorch.load_model(model_uri)
     logged_model.eval()
     
     best_pt = Path(cfg["experiment"]["model_dir"]) / "checkpoints" / "best.pt"
@@ -242,4 +252,7 @@ def test_mlflow_generator_logging(setup_configs, monkeypatch):
         
     trial_artifacts = [a.path for a in client.list_artifacts(trial_run.info.run_id)]
     assert "generator" not in trial_artifacts
+    if hasattr(client, "search_logged_models"):
+        trial_models = [m.name for m in client.search_logged_models(experiment_ids=[exp.experiment_id]) if getattr(m, "source_run_id", None) == trial_run.info.run_id]
+        assert "generator" not in trial_models
 

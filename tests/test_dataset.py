@@ -1,8 +1,6 @@
-import os
 import csv
 import numpy as np
 import torch
-import pytest
 from src.data.dataset import CloudDataset
 
 def test_cloud_dataset(tmp_path):

@@ -63,8 +63,12 @@ python serving/demo_app.py
 
 ## 📦 What We Built
 * **Data Layer:** PyTorch datasets with automated 256x256 tiling and normalization `[-1, 1]`.
+* **DVC Data Versioning:** Remote dataset synchronization and version tracking via DagsHub DVC remote.
 * **Model Layer:** pix2pix fork adapted for 3-band RGB imagery.
-* **Tracking Layer:** Remote MLflow integration via DAGsHub logging metrics and artifacts.
+* **Tracking Layer:** Remote MLflow integration via DAGsHub logging metrics, traceability parameters, and artifacts.
+* **Optuna Tuning (`src/training/tune.py`):** Automated hyperparameter optimization maximizing validation SSIM across trials.
+* **PSNR/SSIM Evaluation with Baseline:** Benchmark evaluation on test split comparing model predictions against cloudy input baseline.
+* **Pytest Suite:** Test suite covering data transformations, dataset loading, device resolution, checkpoint selection, and MLflow artifact logging.
 * **Serving Layer:** Standalone inference pipeline wrapping the generator into an interactive Gradio UI.
 
 ## ✂️ Not Attempted Due to Timebox
@@ -80,6 +84,7 @@ Given the strict constraint, we intentionally cut the following scope to guarant
 | **Monitoring/drift detection** | Out of scope per PRD. Focus was purely on the initial training & deployment phases. |
 
 ### Tool / Infrastructure Cuts
+* **Full DVC pipeline (dvc.yaml):** Versioned data with DVC, but did not construct a multi-stage `dvc.yaml` workflow pipeline.
 * **FastAPI:** Didn't build a standalone API. Wired our Gradio UI directly to the PyTorch model for simplicity.
 * **Docker:** Ran the code directly in Colab and local environments instead of building a container.
 * **GitHub Actions:** Did not set up automated CI pipelines to run on code push.

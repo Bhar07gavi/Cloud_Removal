@@ -81,7 +81,7 @@ def evaluate(config_path: str) -> None:
     if not checkpoint_path.exists():
         raise FileNotFoundError(
             f"Checkpoint not found: {checkpoint_path}\n"
-            "Train first: python src/training/train.py --config configs/train_rice.yaml"
+            "Train first: python -m src.training.train --config configs/train_rice.yaml"
         )
 
     gen = UNetGenerator(in_channels=bands, out_channels=bands).to(device)

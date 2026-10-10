@@ -1,8 +1,6 @@
 """Pix2Pix GAN Training Loop with DagsHub MLflow & Checkpointing."""
 
 import argparse
-import json
-import os
 from pathlib import Path
 import random
 import matplotlib
@@ -14,7 +12,6 @@ import mlflow.pytorch
 import numpy as np
 from skimage.metrics import structural_similarity
 import subprocess
-import tempfile
 import torch
 from src.utils.device import get_device
 import torch.nn as nn
@@ -261,6 +258,7 @@ def train(config_path: str, epochs_override: int | None = None):
         print(f"Training Complete! Best Val L1: {best_val_loss:.4f}")
 
         best_pt = checkpoint_dir / "best.pt"
+        logged_model_info = None
         if best_pt.exists():
             ckpt = torch.load(best_pt, map_location=device)
             gen.load_state_dict(ckpt["generator"])
@@ -271,22 +269,15 @@ def train(config_path: str, epochs_override: int | None = None):
             if "serialization_format" in sig.parameters:
                 log_kwargs["serialization_format"] = "pickle"
             if "name" in sig.parameters:
-                mlflow.pytorch.log_model(gen, name="generator", **log_kwargs)
+                logged_model_info = mlflow.pytorch.log_model(gen, name="generator", **log_kwargs)
             else:
-                mlflow.pytorch.log_model(gen, artifact_path="generator", **log_kwargs)
-
-            with tempfile.TemporaryDirectory() as tmp_m:
-                save_kwargs = {}
-                save_sig = inspect.signature(mlflow.pytorch.save_model)
-                if "serialization_format" in save_sig.parameters:
-                    save_kwargs["serialization_format"] = "pickle"
-                mlflow.pytorch.save_model(gen, tmp_m, **save_kwargs)
-                mlflow.log_artifacts(tmp_m, "generator")
+                logged_model_info = mlflow.pytorch.log_model(gen, artifact_path="generator", **log_kwargs)
 
             mlflow.log_metrics({
                 "best_epoch": ckpt["epoch"],
                 "best_val_l1": best_val_loss,
             })
+        return logged_model_info
 
 
 # ---------------------------------------------------------------------------
@@ -385,22 +376,9 @@ def train_one_run(config: dict) -> float:
     # ---- Compute SSIM on val set using the best saved checkpoint ----
     ckpt = torch.load(str(checkpoint_dir / "best.pt"), map_location=device)
     gen.load_state_dict(ckpt["generator"])
-    gen.eval()
 
     print(f"  [trial] Computing val SSIM over {len(val_ds)} images...")
-    ssim_scores: list[float] = []
-    with torch.no_grad():
-        for cloud, gt in tqdm(val_loader, desc="Computing val SSIM", leave=False):
-            cloud = cloud.to(device)
-            fake  = gen(cloud)
-            for i in range(fake.shape[0]):
-                fake_np = to_unit_range(fake[i]).permute(1, 2, 0).cpu().numpy().astype("float32")
-                gt_np = to_unit_range(gt[i]).permute(1, 2, 0).cpu().numpy().astype("float32")
-                ssim_scores.append(
-                    float(structural_similarity(gt_np, fake_np, data_range=1.0, channel_axis=2))
-                )
-
-    mean_ssim = float(np.mean(ssim_scores)) if ssim_scores else 0.0
+    mean_ssim = compute_ssim(gen, val_loader, device)
     print(f"  [trial] Val mean SSIM = {mean_ssim:.6f}")
     return mean_ssim
 
