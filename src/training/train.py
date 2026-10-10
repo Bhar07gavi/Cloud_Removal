@@ -7,10 +7,14 @@ from pathlib import Path
 import random
 import matplotlib
 matplotlib.use("Agg")
+import inspect
 import matplotlib.pyplot as plt
 import mlflow
+import mlflow.pytorch
 import numpy as np
 from skimage.metrics import structural_similarity
+import subprocess
+import tempfile
 import torch
 from src.utils.device import get_device
 import torch.nn as nn
@@ -192,6 +196,24 @@ def train(config_path: str, epochs_override: int | None = None):
     best_val_loss = float("inf")
 
     with mlflow.start_run():
+        dataset_md5 = "unknown"
+        dvc_path = Path("dataset.dvc")
+        if dvc_path.exists():
+            try:
+                with open(dvc_path, "r", encoding="utf-8") as f:
+                    dvc_data = yaml.safe_load(f)
+                dataset_md5 = dvc_data.get("outs", [{}])[0].get("md5", "unknown")
+            except Exception:
+                dataset_md5 = "unknown"
+
+        git_commit = "unknown"
+        try:
+            git_commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+            ).decode("utf-8").strip()
+        except Exception:
+            git_commit = "unknown"
+
         mlflow.log_params({
             "epochs": epochs,
             "batch_size": batch_size,
@@ -199,7 +221,15 @@ def train(config_path: str, epochs_override: int | None = None):
             "lambda_l1": lambda_l1,
             "train_samples": len(train_ds),
             "val_samples": len(val_ds),
+            "dataset_md5": dataset_md5,
+            "git_commit": git_commit,
         })
+
+        if Path(config_path).exists():
+            mlflow.log_artifact(config_path, "configs")
+        ds_cfg_path = cfg["dataset"].get("config_path", "")
+        if ds_cfg_path and Path(ds_cfg_path).exists():
+            mlflow.log_artifact(ds_cfg_path, "configs")
 
         for epoch in range(1, epochs + 1):
             desc = f"Epoch {epoch}/{epochs}"
@@ -229,6 +259,34 @@ def train(config_path: str, epochs_override: int | None = None):
                 print(f"  * New best model saved (val L1: {best_val_loss:.4f})")
 
         print(f"Training Complete! Best Val L1: {best_val_loss:.4f}")
+
+        best_pt = checkpoint_dir / "best.pt"
+        if best_pt.exists():
+            ckpt = torch.load(best_pt, map_location=device)
+            gen.load_state_dict(ckpt["generator"])
+            gen.eval()
+
+            log_kwargs = {}
+            sig = inspect.signature(mlflow.pytorch.log_model)
+            if "serialization_format" in sig.parameters:
+                log_kwargs["serialization_format"] = "pickle"
+            if "name" in sig.parameters:
+                mlflow.pytorch.log_model(gen, name="generator", **log_kwargs)
+            else:
+                mlflow.pytorch.log_model(gen, artifact_path="generator", **log_kwargs)
+
+            with tempfile.TemporaryDirectory() as tmp_m:
+                save_kwargs = {}
+                save_sig = inspect.signature(mlflow.pytorch.save_model)
+                if "serialization_format" in save_sig.parameters:
+                    save_kwargs["serialization_format"] = "pickle"
+                mlflow.pytorch.save_model(gen, tmp_m, **save_kwargs)
+                mlflow.log_artifacts(tmp_m, "generator")
+
+            mlflow.log_metrics({
+                "best_epoch": ckpt["epoch"],
+                "best_val_l1": best_val_loss,
+            })
 
 
 # ---------------------------------------------------------------------------

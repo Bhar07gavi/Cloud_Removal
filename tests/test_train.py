@@ -175,3 +175,71 @@ def test_checkpoint_selection_C(setup_configs, monkeypatch):
     best_pt = Path(cfg["experiment"]["model_dir"]) / "checkpoints" / "best.pt"
     ckpt = torch.load(best_pt)
     assert ckpt["epoch"] == 2
+
+def test_mlflow_generator_logging(setup_configs, monkeypatch):
+    """Assert generator model and traceability are logged to MLflow in train(), but not in train_one_run()."""
+    cfg_path, cfg = setup_configs
+    
+    # 2 epochs: mock validate so best epoch is 1 (0.2, 0.4)
+    val_sequence = [0.2, 0.4]
+    call_idx = 0
+    def mock_validate(gen, loader, device, criterion_l1):
+        nonlocal call_idx
+        v = val_sequence[call_idx]
+        call_idx += 1
+        return v
+        
+    monkeypatch.setattr("src.training.train.validate", mock_validate)
+    
+    train(cfg_path, epochs_override=2)
+    
+    import mlflow
+    import mlflow.pytorch
+    from src.models.generator import UNetGenerator
+    
+    mlflow.set_tracking_uri(cfg["mlflow"]["tracking_uri"])
+    client = mlflow.tracking.MlflowClient()
+    exp = client.get_experiment_by_name(cfg["mlflow"]["experiment_name"])
+    runs = client.search_runs(exp.experiment_id)
+    assert len(runs) > 0
+    train_run = runs[0]
+    
+    # a) assert params dataset_md5 and git_commit exist and metrics best_epoch and best_val_l1 exist
+    assert "dataset_md5" in train_run.data.params
+    assert "git_commit" in train_run.data.params
+    assert "best_epoch" in train_run.data.metrics
+    assert "best_val_l1" in train_run.data.metrics
+    assert train_run.data.metrics["best_epoch"] == 1
+    
+    # b) assert artifact list contains "generator" model and "configs" folder
+    artifacts = [a.path for a in client.list_artifacts(train_run.info.run_id)]
+    assert "generator" in artifacts
+    assert "configs" in artifacts
+    
+    # c) load logged model with mlflow.pytorch.load_model on a fixed random input and assert torch.allclose against generator rebuilt from best.pt, using eval mode in both
+    logged_model = mlflow.pytorch.load_model(f"runs:/{train_run.info.run_id}/generator")
+    logged_model.eval()
+    
+    best_pt = Path(cfg["experiment"]["model_dir"]) / "checkpoints" / "best.pt"
+    ckpt = torch.load(best_pt, map_location="cpu")
+    rebuilt_gen = UNetGenerator(3, 3)
+    rebuilt_gen.load_state_dict(ckpt["generator"])
+    rebuilt_gen.eval()
+    
+    torch.manual_seed(123)
+    test_inp = torch.randn(1, 3, 256, 256)
+    with torch.no_grad():
+        out_logged = logged_model(test_inp)
+        out_rebuilt = rebuilt_gen(test_inp)
+    assert torch.allclose(out_logged, out_rebuilt)
+    
+    # d) assert a train_one_run() run produces NO "generator" model artifact
+    cfg["training"]["epochs"] = 2
+    val_sequence = [0.2, 0.4]
+    call_idx = 0
+    with mlflow.start_run() as trial_run:
+        train_one_run(cfg)
+        
+    trial_artifacts = [a.path for a in client.list_artifacts(trial_run.info.run_id)]
+    assert "generator" not in trial_artifacts
+
