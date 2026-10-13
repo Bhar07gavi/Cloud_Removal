@@ -4,10 +4,16 @@ numpy
 Pillow
 scikit-image
 pyyaml
-mlflow
+mlflow>=2.0.0
 dagshub
 dvc[s3]
 matplotlib
 tqdm
 optuna
 pytest
+fastapi>=0.100.0
+uvicorn>=0.22.0
+python-multipart>=0.0.6
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+httpx>=0.24.0

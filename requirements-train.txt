@@ -1,0 +1,14 @@
+# Training & evaluation dependencies (Phase 1)
+torch>=2.0.0
+torchvision>=0.15.0
+numpy
+Pillow
+scikit-image
+pyyaml
+mlflow>=2.0.0
+dagshub
+dvc[s3]
+matplotlib
+tqdm
+optuna
+pytest
