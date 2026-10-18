@@ -141,12 +141,12 @@ async def predict(file: UploadFile = File(..., description="Cloudy optical satel
         # 4. Check pixel limits
         width, height = image.size
         num_pixels = width * height
-        if num_pixels > settings.max_image_pixels:
+        if num_pixels > settings.max_pixels:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=(
                     f"Image resolution {width}x{height} ({num_pixels:,} pixels) exceeds "
-                    f"maximum allowed limit of {settings.max_image_pixels:,} pixels."
+                    f"maximum allowed limit of {settings.max_pixels:,} pixels."
                 ),
             )
 

@@ -3,13 +3,10 @@
 from typing import List, Optional
 from pathlib import Path
 import os
+import re
 import yaml
-from pydantic import Field
-try:
-    from pydantic_settings import BaseSettings, SettingsConfigDict
-except ImportError:
-    from pydantic import BaseModel as BaseSettings
-    SettingsConfigDict = None
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class ServingSettings(BaseSettings):
@@ -19,6 +16,10 @@ class ServingSettings(BaseSettings):
     model_name: str = Field(default="cloud-removal-gan", description="Registered model name in MLflow")
     model_alias: str = Field(default="production", description="Model alias to load from registry")
     model_stage: str = Field(default="Production", description="Fallback stage for registry backends lacking alias support")
+    model_uri: Optional[str] = Field(
+        default=None,
+        description="MLflow model URI (e.g. models:/<name>@<alias>)"
+    )
     mlflow_tracking_uri: Optional[str] = Field(
         default=None,
         description="MLflow tracking URI (e.g., sqlite:///mlflow.db or remote URL)"
@@ -30,13 +31,14 @@ class ServingSettings(BaseSettings):
 
     # Compute & Inference
     device: str = Field(default="auto", description="Compute device ('cuda', 'cpu', or 'auto')")
-    tile_size: int = Field(default=256, description="Tile dimension for UNetGenerator (must be 256)")
+    tile_size: int = Field(default=256, gt=0, description="Tile dimension for UNetGenerator (must be 256)")
     tile_overlap: int = Field(default=32, description="Overlap in pixels between adjacent tiles")
     tile_batch_size: int = Field(default=4, description="Batch size for parallel tile evaluation")
 
     # API Guardrails
-    max_image_pixels: int = Field(
+    max_pixels: int = Field(
         default=25_000_000,
+        gt=0,
         description="Maximum allowed image pixels (height * width) to prevent OOM/DoS"
     )
     max_upload_size_bytes: int = Field(
@@ -48,13 +50,47 @@ class ServingSettings(BaseSettings):
         description="Allowed input image formats"
     )
 
-    if SettingsConfigDict is not None:
-        model_config = SettingsConfigDict(
-            env_prefix="SERVING_",
-            env_file=".env",
-            env_file_encoding="utf-8",
-            extra="ignore",
-        )
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        extra="ignore",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
+
+    @field_validator("device")
+    @classmethod
+    def validate_device(cls, v: str) -> str:
+        if v not in ("auto", "cuda", "cpu"):
+            raise ValueError(f"device must be one of 'auto', 'cuda', 'cpu', got '{v}'")
+        return v
+
+    @field_validator("tile_size")
+    @classmethod
+    def validate_tile_size(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("tile_size must be > 0")
+        return v
+
+    @field_validator("max_pixels")
+    @classmethod
+    def validate_max_pixels(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("max_pixels must be > 0")
+        return v
+
+    @model_validator(mode="after")
+    def validate_model_uri_and_sync(self) -> "ServingSettings":
+        if self.model_uri is None:
+            self.model_uri = f"models:/{self.model_name}@{self.model_alias}"
+        else:
+            match = re.match(r"^models:/([^/@]+)@([^/@]+)$", self.model_uri)
+            if match:
+                self.model_name = match.group(1)
+                self.model_alias = match.group(2)
+            else:
+                raise ValueError("MODEL_URI must look like models:/<name>@<alias>")
+        return self
 
 
 settings = ServingSettings()
@@ -84,7 +120,7 @@ def resolve_tracking_uri(
 
     Precedence order:
     1. Explicit function/CLI argument (`explicit_uri`).
-    2. Serving settings override (`settings.mlflow_tracking_uri` / `SERVING_MLFLOW_TRACKING_URI`).
+    2. Serving settings override (`settings.mlflow_tracking_uri` / `MLFLOW_TRACKING_URI`).
     3. Standard MLflow environment variable (`MLFLOW_TRACKING_URI`).
     4. Configuration file (`configs/train_rice.yaml` -> `mlflow.tracking_uri`).
     5. Fallback local backend (`fallback_uri`, default: 'sqlite:///mlflow.db').

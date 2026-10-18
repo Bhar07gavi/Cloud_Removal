@@ -123,9 +123,9 @@ def test_predict_invalid_corrupted_file(client, inject_test_model):
 
 
 def test_predict_oversized_image_pixels(client, inject_test_model, monkeypatch):
-    """POST /predict must return 413 when image pixels exceed max_image_pixels limit."""
+    """POST /predict must return 413 when image pixels exceed max_pixels limit."""
     # Set limit artificially low for test
-    monkeypatch.setattr(settings, "max_image_pixels", 10_000)
+    monkeypatch.setattr(settings, "max_pixels", 10_000)
 
     # 200x200 = 40,000 pixels > 10,000 limit
     img_bytes = make_test_image_bytes(200, 200)
